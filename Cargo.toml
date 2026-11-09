@@ -11,3 +11,10 @@ categories = ["parser-implementations"]
 readme = "README.md"
 
 [dependencies]
+# Parser of the clean hive (keys, values, subkey lists, big data).
+nt_hive2 = "4"
+# Shared with the rest of the family: transaction-log replay (HvLE and DIRT) and the
+# bounds-checked cell walker that finds deleted keys and values.
+blockcarve = { version = "0.1.2", default-features = false }
+chrono = "0.4"
+walkdir = "2"
