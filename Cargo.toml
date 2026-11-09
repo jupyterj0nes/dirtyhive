@@ -1,0 +1,13 @@
+[package]
+name = "dirtyhive"
+version = "0.1.0"
+edition = "2021"
+description = "Windows registry hives read the forensic way: locate and apply the transaction logs (.LOG1/.LOG2) of a dirty hive, recover deleted keys and values from the free cells, and hand the clean hive to a parser. Built on nt_hive2."
+authors = ["Tono Diaz (@jupyterj0nes)"]
+repository = "https://github.com/jupyterj0nes/dirtyhive"
+license = "AGPL-3.0-only"
+keywords = ["forensics", "dfir", "registry", "regf", "windows"]
+categories = ["parser-implementations"]
+readme = "README.md"
+
+[dependencies]
