@@ -36,7 +36,7 @@ pub mod code {
         LOG_NO_ENTRIES = 106, "the log has a valid base block but not one usable HvLE entry; nothing to replay from it";
         LOG_SEQUENCE_JUMP = 107, "the entry sequence numbers inside a log are not consecutive; the entries after the jump may not apply";
         LOG_STALE = 108, "every entry of the log is older than the hive's secondary sequence: it was already flushed into the hive; nothing to apply (normal for the other log of the pair)";
-        LOG_GAP = 109, "the first entry of the log is ahead of the hive's secondary sequence and the other log does not bridge it: an intermediate log is missing, nothing can be applied safely";
+        LOG_GAP = 109, "no entry of the log carries the sequence its own base block starts at (or the base block is older than the hive): the log cannot start a recovery, by the format's rule";
         LOG_FOREIGN = 110, "the embedded hive name in the log's base block is not the hive's: the log belongs to another hive (another user's NTUSER.DAT) and is rejected";
         LOG_AMBIGUOUS = 111, "two candidates for the same slot scored equally; the first by path was taken, check the other one";
         LOG_REMOTE_MATCH = 112, "the log was found away from its hive (another folder of the evidence); applied after its header was verified against the hive";
@@ -56,6 +56,7 @@ pub mod code {
         LOG_APPLIED = 126, "the transaction logs were applied: the hive now holds the writes that had not reached the file";
         LOG_INDEX_BUILT = 127, "the search root was walked once to index every .LOG1/.LOG2/.LOG under it (cached for the next hive)";
         LOG_CANDIDATE = 128, "a file was considered as a log of this hive, with its score";
+        LOG_AHEAD = 129, "the log starts after the hive's own sequence, at the sequence its base block names: by the format (regf specification, transaction logs, note 7) recovery starts there, so it is applied, as Windows would; the writes between are in no log any more, so a page they changed and that was not written again keeps its older content";
     }
 }
 
@@ -292,12 +293,23 @@ pub fn relation_to_hive(summary: &LogSummary, hive: &HiveHeader) -> LogRelation 
     if !log_name.is_empty() && !hive_name.is_empty() && !log_name.eq_ignore_ascii_case(hive_name) {
         return LogRelation::Foreign;
     }
+    by_the_format(summary, hive)
+}
+
+/// The rule of the regf specification (transaction log files, new format, notes 5 and 7):
+/// recovery starts at the log entry whose sequence equals the primary sequence of the
+/// log's own base block, and that sequence must not be less than the hive's secondary
+/// sequence. A log written before the hive's last complete write is stale. Nothing bounds
+/// it from above: a hive copied while it was being written (a live system, a shadow copy)
+/// has logs that start later than its own sequence, and they are applied.
+fn by_the_format(summary: &LogSummary, hive: &HiveHeader) -> LogRelation {
+    let start = summary.header.primary_sequence;
     let last = summary.last_sequence().unwrap_or(0);
-    let first = summary.first_sequence().unwrap_or(0);
-    if last <= hive.secondary_sequence {
+    // Every entry at or before the hive's secondary sequence is already in the hive file.
+    if last <= hive.secondary_sequence || start < hive.secondary_sequence {
         return LogRelation::Stale;
     }
-    if first > hive.secondary_sequence.wrapping_add(1) {
+    if !summary.entries.iter().any(|e| e.sequence == start) {
         return LogRelation::Gap;
     }
     LogRelation::Matching
@@ -583,13 +595,16 @@ pub fn reconcile_pair(log1: &mut Option<Candidate>, log2: &mut Option<Candidate>
         }
         let Some(s) = &c.summary else { continue };
         let mine: Vec<u32> = s.entries.iter().map(|e| e.sequence).collect();
+        // Continuing the hive's own sequence, directly or through the other log, or starting
+        // where its base block says (the format's rule): either way it is replayed.
         let relation = if mine.iter().any(|q| reachable.contains(q)) {
             LogRelation::Matching
-        } else if mine.iter().all(|q| *q <= hive.secondary_sequence) {
-            LogRelation::Stale
         } else {
-            LogRelation::Gap
+            by_the_format(s, hive)
         };
+        if relation == LogRelation::Matching && !mine.iter().any(|q| reachable.contains(q)) {
+            diag::warn(code::LOG_AHEAD, format!("{}: starts at {} (its base block), the hive's secondary sequence is {}: applied by the format; writes {} to {} are in no log", c.path.display(), s.header.primary_sequence, hive.secondary_sequence, hive.secondary_sequence.wrapping_add(1), s.header.primary_sequence.wrapping_sub(1)));
+        }
         c.relation = Some(relation);
     }
 }
@@ -832,8 +847,18 @@ mod tests {
         assert_eq!(relation_to_hive(&s, &hive_header(6, 5, &sw.to_uppercase())), LogRelation::Matching);
         let s = inspect(&log_with(&[entry(4, vec![(0, page(512))]), entry(5, vec![(0, page(512))])])).unwrap();
         assert_eq!(relation_to_hive(&s, &hive_header(6, 5, sw)), LogRelation::Stale);
+        // A log that starts after the hive, at its own base block's sequence: the format
+        // applies it (a hive copied while it was being written).
         let s = inspect(&log_with(&[entry(9, vec![(0, page(512))])])).unwrap();
+        assert_eq!(relation_to_hive(&s, &hive_header(6, 5, sw)), LogRelation::Matching);
+        // A log whose entries never reach the sequence its base block starts at cannot start.
+        let mut s = inspect(&log_with(&[entry(9, vec![(0, page(512))]), entry(10, vec![(0, page(512))])])).unwrap();
+        s.header.primary_sequence = 8;
         assert_eq!(relation_to_hive(&s, &hive_header(6, 5, sw)), LogRelation::Gap);
+        // Its base block older than the hive's last complete write: stale.
+        let mut s = inspect(&log_with(&[entry(9, vec![(0, page(512))])])).unwrap();
+        s.header.primary_sequence = 4;
+        assert_eq!(relation_to_hive(&s, &hive_header(6, 5, sw)), LogRelation::Stale);
         let s = inspect(&log_with(&[entry(5, vec![(0, page(512))]), entry(6, vec![(0, page(512))])])).unwrap();
         assert_eq!(relation_to_hive(&s, &hive_header(6, 5, sw)), LogRelation::Matching);
     }
@@ -953,7 +978,7 @@ mod tests {
         let hive = HiveHeader::parse(&fx.primary, "h").unwrap();
         let l1 = inspect_log_bytes(Path::new("1"), &fx.log1).unwrap();
         let l2 = inspect_log_bytes(Path::new("2"), fx.log2.as_ref().unwrap()).unwrap();
-        assert_eq!(relation_to_hive(&l2, &hive), LogRelation::Gap, "alone, LOG2 looks like a gap");
+        assert_eq!(relation_to_hive(&l2, &hive), LogRelation::Matching, "alone, LOG2 starts at its own base block's sequence: applicable by the format");
         let mut c1 = Some(Candidate { path: "1".into(), slot: LogSlot::Log1, same_directory: true, score: 0, relation: Some(relation_to_hive(&l1, &hive)), summary: Some(l1) });
         let mut c2 = Some(Candidate { path: "2".into(), slot: LogSlot::Log2, same_directory: true, score: 0, relation: Some(LogRelation::Gap), summary: Some(l2) });
         reconcile_pair(&mut c1, &mut c2, &hive);

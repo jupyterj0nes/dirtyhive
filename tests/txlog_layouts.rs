@@ -327,8 +327,12 @@ fn stale_logs_only_leave_hive_dirty_with_warning() {
 }
 
 #[test]
-fn gap_log_is_not_applied() {
-    let d = TempDir::new("loc_gap");
+fn log_starting_later_is_applied_by_the_format() {
+    // The hive says 6/5, the log starts at 21 (its own base block) with entry 21: by the regf
+    // specification (transaction logs, note 7) recovery starts at the log's base block
+    // sequence when it is not less than the hive's secondary one. Applied, and the writes
+    // 6 to 20 that no log holds any more are named.
+    let d = TempDir::new("loc_ahead");
     let base = HiveBuilder::software();
     let mut step = HiveBuilder::software();
     step.sz(RUN, "Marker", r"C:\m.exe");
@@ -337,8 +341,31 @@ fn gap_log_is_not_applied() {
     d.write("SOFTWARE.LOG1", &fx.log1);
     diag::clear();
     txlog::clear_log_index();
+    let mut h = Hive::open(&hive, &OpenOptions::default()).unwrap();
+    assert!(h.info().recovered(), "{:?}", diag::snapshot());
+    assert!(diag::has(log_code::LOG_AHEAD));
+    assert!(!diag::has(log_code::LOG_GAP));
+    let k = h.key(RUN).unwrap().expect("Run key");
+    assert!(k.values.iter().any(|v| v.name == "Marker"), "the write held only by the log is there");
+}
+
+#[test]
+fn log_whose_entries_miss_its_own_start_is_not_applied() {
+    // The same log with its base block saying 19: no entry carries 19, so it cannot start a
+    // recovery (note 7); the hive is read as it is and the gap is reported.
+    let d = TempDir::new("loc_gap");
+    let base = HiveBuilder::software();
+    let mut step = HiveBuilder::software();
+    step.sz(RUN, "Marker", r"C:\m.exe");
+    let fx = build_dirty(&base, &[&step], 20, false);
+    let mut log = fx.log1.clone();
+    patch_base_block(&mut log[..512], 19, 19, 6);
+    let hive = d.write("SOFTWARE", &HiveBuilder::software().build_with(6, 5));
+    d.write("SOFTWARE.LOG1", &log);
+    diag::clear();
+    txlog::clear_log_index();
     let h = Hive::open(&hive, &OpenOptions::default()).unwrap();
-    assert!(!h.info().recovered());
+    assert!(!h.info().recovered(), "{:?}", diag::snapshot());
     assert!(diag::has(log_code::LOG_GAP));
 }
 

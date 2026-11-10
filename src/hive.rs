@@ -545,7 +545,7 @@ impl Hive {
         if !search.has_matching() {
             let gap = [&search.log1, &search.log2].into_iter().flatten().any(|c| c.relation == Some(txlog::LogRelation::Gap));
             if gap {
-                diag::warn(txlog::code::LOG_GAP, format!("{label}: the located logs start ahead of the hive's secondary sequence {}; the writes between were lost with an earlier log, nothing can be replayed consistently", header.secondary_sequence));
+                diag::warn(txlog::code::LOG_GAP, format!("{label}: no located log has an entry at the sequence its own base block starts at (hive secondary sequence {}); nothing can start a recovery", header.secondary_sequence));
             } else {
                 diag::warn(txlog::code::LOG_STALE, format!("{label}: every located log is behind the hive's secondary sequence {}; nothing to replay", header.secondary_sequence));
             }

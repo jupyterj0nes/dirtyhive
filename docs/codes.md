@@ -36,7 +36,7 @@ Every code `dirtyhive` can record or return, by number. Generated from the sourc
 | `DH106_LOG_NO_ENTRIES` | the log has a valid base block but not one usable HvLE entry; nothing to replay from it |
 | `DH107_LOG_SEQUENCE_JUMP` | the entry sequence numbers inside a log are not consecutive; the entries after the jump may not apply |
 | `DH108_LOG_STALE` | every entry of the log is older than the hive's secondary sequence: it was already flushed into the hive; nothing to apply (normal for the other log of the pair) |
-| `DH109_LOG_GAP` | the first entry of the log is ahead of the hive's secondary sequence and the other log does not bridge it: an intermediate log is missing, nothing can be applied safely |
+| `DH109_LOG_GAP` | no entry of the log carries the sequence its own base block starts at (or the base block is older than the hive): the log cannot start a recovery, by the format's rule |
 | `DH110_LOG_FOREIGN` | the embedded hive name in the log's base block is not the hive's: the log belongs to another hive (another user's NTUSER.DAT) and is rejected |
 | `DH111_LOG_AMBIGUOUS` | two candidates for the same slot scored equally; the first by path was taken, check the other one |
 | `DH112_LOG_REMOTE_MATCH` | the log was found away from its hive (another folder of the evidence); applied after its header was verified against the hive |
@@ -56,6 +56,7 @@ Every code `dirtyhive` can record or return, by number. Generated from the sourc
 | `DH126_LOG_APPLIED` | the transaction logs were applied: the hive now holds the writes that had not reached the file |
 | `DH127_LOG_INDEX_BUILT` | the search root was walked once to index every .LOG1/.LOG2/.LOG under it (cached for the next hive) |
 | `DH128_LOG_CANDIDATE` | a file was considered as a log of this hive, with its score |
+| `DH129_LOG_AHEAD` | the log starts after the hive's own sequence, at the sequence its base block names: by the format (regf specification, transaction logs, note 7) recovery starts there, so it is applied, as Windows would; the writes between are in no log any more, so a page they changed and that was not written again keeps its older content |
 | `DH200_CELLS_NOT_A_HIVE` | the bytes handed to the deleted-cell scan do not start with a base block and a hive bin; the scan was skipped |
 | `DH201_CELLS_SCAN_PANIC` | the cell walker panicked on this hive (a shape it has never seen); the deleted entries of this hive are not reported, the live ones are |
 | `DH202_CELLS_SCANNED` | the deleted-cell scan ran: bins, cells, live keys, deleted keys and orphan values counted |

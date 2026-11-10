@@ -120,7 +120,8 @@ happen. Errors returned to the caller are `Error { code, detail }`, displayed as
   type, deleted keys and values as free cells, Marvin32 hashes), so every path is exercised
   with hand-built evidence; the tools built on dirtyhive use it in their own tests.
 - Tests over the lab's real triage packages (`D:\evidence`, skipped where absent) cover a
-  dirty `NTUSER.DAT` whose logs are ahead of its primary (kept dirty, the gap reported), a
+  dirty `NTUSER.DAT` whose logs start after its primary (recovered by the format's rule, the
+  writes no log holds named), a
   dirty `Amcache.hve` without logs, clean `SYSTEM` and `SOFTWARE` walked completely, every
   user hive of a triage, and the deleted-cell scan over every hive of `config`.
 - `cargo test --release`, `cargo clippy --all-targets` clean, `#![forbid(unsafe_code)]`.
@@ -132,8 +133,14 @@ happen. Errors returned to the caller are `Error { code, detail }`, displayed as
   are zero, as Windows leaves them.
 - Big data (`db` cells, values over 16 KiB) is read by nt_hive2; `REG_LINK` and the resource
   types come back as binary.
-- Logs whose sequence numbers are ahead of the hive's (a stale primary copy) are reported
-  (`DH109_LOG_GAP`) and not applied, as Windows would do; there is no lenient mode.
+- Logs that start after the hive's own sequence (a hive copied while it was being written: a
+  live system, a shadow copy) are applied from the sequence their own base block names, as
+  the regf specification says (transaction logs, note 7: the first entry equals the log's
+  base block primary sequence and is not less than the hive's secondary sequence) and as
+  Windows does on boot. The writes between are in no log any more: a page they changed and
+  that was not written again keeps its older content. `DH129_LOG_AHEAD` says so for each
+  log. A log that cannot start (no entry at its own base block's sequence) is reported
+  (`DH109_LOG_GAP`) and not applied.
 
 ## License
 

@@ -24,11 +24,12 @@ fn open(path: &Path, root: Option<&Path>) -> Hive {
 }
 
 #[test]
-fn dirty_ntuser_whose_logs_are_ahead_stays_dirty_with_the_gap_reported() {
-    // The lab copy of administrator_NTUSER.DAT says 71/70 while its logs hold entries 95 to
-    // 98: the primary is a stale copy and the writes between were overwritten in the logs.
-    // Windows would refuse to apply them too; the hive is read as it is, and the analyst is
-    // told exactly why.
+fn dirty_ntuser_whose_logs_start_later_is_recovered_by_the_format() {
+    // The lab copy of administrator_NTUSER.DAT says 71/70 while its logs start at 96 and 98
+    // (their own base blocks). By the regf specification (transaction logs, note 7) the
+    // first entry must equal the log's base block sequence and not be less than the hive's
+    // secondary sequence: these logs qualify, so they are applied, as Windows would on boot,
+    // and the analyst is told that writes 71 to 95 are in no log any more.
     let Some(p) = lab(r"mixed-intake\dev-srv01-hives\administrator_NTUSER.DAT") else { return };
     let mut h = open(&p, None);
     let info = h.info();
@@ -36,11 +37,13 @@ fn dirty_ntuser_whose_logs_are_ahead_stays_dirty_with_the_gap_reported() {
     assert!(info.was_dirty, "the lab hive is dirty (sequence 71/70)");
     let found = info.logs_found.as_ref().expect("the logs next to the hive are located");
     assert!(found.log1.is_some() && found.log2.is_some(), "{found:?}");
-    assert!(!info.recovered(), "{:?}", diag::snapshot());
-    assert!(info.is_dirty);
-    assert!(diag::has(txlog::code::LOG_GAP), "{:?}", diag::snapshot());
-    assert!(diag::has(hive_code::DIRTY_KEPT));
-    assert!(!diag::has(txlog::code::LOG_STALE), "a gap is not staleness");
+    assert!(info.recovered(), "{:?}", diag::snapshot());
+    assert!(!info.is_dirty);
+    assert!(diag::has(txlog::code::LOG_AHEAD), "{:?}", diag::snapshot());
+    assert!(diag::has(txlog::code::LOG_APPLIED));
+    assert!(!diag::has(txlog::code::LOG_GAP));
+    assert!(!diag::has(hive_code::DIRTY_KEPT));
+    assert!(!diag::has(txlog::code::LOG_STALE));
     assert_eq!(diag::summary().errors, 0);
     // The profile has the usual HKCU layout, and every key walks.
     assert!(h.key(r"Software\Microsoft\Windows\CurrentVersion").unwrap().is_some());
